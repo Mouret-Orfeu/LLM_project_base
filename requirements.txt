@@ -1,0 +1,12 @@
+regex
+requests
+numpy
+torch
+ipykernel
+transformers
+python-dotenv
+streamlit
+streamlit-chat
+selenium
+openai
+matplotlib
