@@ -30,9 +30,9 @@ from tqdm.auto import tqdm  # progress bars
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from huggingface_hub import login as hf_login
 
-from rca_llm import Trainer, Evaluator, CfgNode, set_seed, setup_logging
-from rca_llm.RCADataset import RCADataset
-from rca_llm.HFModelAdapter import HFModelAdapter
+from llm_custom_lib import Trainer, Evaluator, CfgNode, set_seed, setup_logging
+from llm_custom_lib.CustomDataset import CustomDataset
+from llm_custom_lib.HFModelAdapter import HFModelAdapter
 
 # Color helpers (ANSI)
 GREEN = "\033[32m"
@@ -84,19 +84,19 @@ def init_or_load_perf_df(perf_path: Path,
             pass
     cols = pd.MultiIndex.from_product(
         [model_types, split_names, metrics, max_iters],
-        names=["model_type", "split", "perf_metric", "training_duration_max_iter"],
+        names=["model_id", "split", "perf_metric", "training_duration_max_iter"],
     )
     df = pd.DataFrame(index=["value"], columns=cols, dtype=float)
     return df
 
 
 def update_perf_df(perf_df: pd.DataFrame,
-                   model_type: str,
+                   model_id: str,
                    split_name: str,
                    max_iter: int,
                    metrics: Dict[str, float]) -> pd.DataFrame:
     for k, v in metrics.items():
-        perf_df.loc["value", (model_type, split_name, k, max_iter)] = float(v) if v is not None else np.nan
+        perf_df.loc["value", (model_id, split_name, k, max_iter)] = float(v) if v is not None else np.nan
     return perf_df
 
 
@@ -141,13 +141,13 @@ def write_losses_callback_factory(csv_path: Path):
 
 
 def build_log_config(work_dir: Path,
-                     model_type: str,
+                     model_id: str,
                      train_config: CfgNode,
                      eval_config: CfgNode,
                      data_info: Dict[str, Any]) -> CfgNode:
     cfg = CfgNode(
         system=CfgNode(work_dir=str(work_dir)),
-        model=CfgNode(model_type=model_type),
+        model=CfgNode(model_id=model_id),
         trainer=train_config,
         evaluator=eval_config,
         data=CfgNode(**data_info),
@@ -177,6 +177,7 @@ def main():
         sys.exit(1)
     df = pd.read_csv(data_path, sep=';', encoding='utf-8')
 
+    # example of model types (HF model name) to evaluate
     model_types = [
         "meta-llama/Llama-3.2-1B-Instruct",
         "meta-llama/Llama-3.2-1B",
@@ -204,32 +205,32 @@ def main():
     global_pbar = tqdm(total=total_runs, desc="Total trainings", position=0)
 
     # Iterate over models
-    for model_type in model_types:
-        info(f"\n=== Model: {model_type} ===")
+    for model_id in model_types:
+        info(f"\n=== Model: {model_id} ===")
         info("Loading tokenizer & model (may take a while)...")
-        tokenizer = AutoTokenizer.from_pretrained(model_type, token=hf_token or True)
+        tokenizer = AutoTokenizer.from_pretrained(model_id, token=hf_token or True)
         hf_model = AutoModelForCausalLM.from_pretrained(
-            model_type,
+            model_id,
             token=hf_token or True,
             torch_dtype=torch.bfloat16 if torch.cuda.is_available() else None,
             device_map="auto" if torch.cuda.is_available() else None,
         )
-        model = HFModelAdapter(hf_model, model_type)
+        model = HFModelAdapter(hf_model, model_id)
 
         # For each split
         for fold_idx in range(n_splits):
             split_name = f"split_{fold_idx + 1}"
             info(f"\n-- {split_name} --")
             split_pbar = tqdm(total=len(max_iters_list),
-                              desc=f"{model_type} | {split_name}",
+                              desc=f"{model_id} | {split_name}",
                               leave=False, position=1)
 
             test_idx = folds[fold_idx]
             train_idx = np.concatenate([folds[i] for i in range(n_splits) if i != fold_idx])
 
             # Datasets for this split
-            train_dataset = RCADataset(df, 'train', tokenizer, indices=train_idx)
-            test_dataset = RCADataset(df, 'test', tokenizer, indices=test_idx)
+            train_dataset = CustomDataset(df, 'train', tokenizer, indices=train_idx)
+            test_dataset = CustomDataset(df, 'test', tokenizer, indices=test_idx)
 
             # For each training duration (max_iter)
             for max_iter in max_iters_list:
@@ -249,7 +250,7 @@ def main():
 
                 # Prepare logging directory and files
                 run_dir = logs_root / (
-                    f"{model_type.replace('/', '__')}/"  # safe folder name
+                    f"{model_id.replace('/', '__')}/"  # safe folder name
                     f"{split_name}/"
                     f"maxiter_{max_iter}__{datetime.utcnow().strftime('%Y%m%dT%H%M%SZ')}"
                 )
@@ -263,7 +264,7 @@ def main():
                     "train_size": int(len(train_idx)),
                     "test_size": int(len(test_idx)),
                 }
-                log_cfg = build_log_config(run_dir, model_type, train_config, eval_config, data_info)
+                log_cfg = build_log_config(run_dir, model_id, train_config, eval_config, data_info)
                 setup_logging(log_cfg)
 
                 # Register loss logging callback
@@ -278,7 +279,7 @@ def main():
                 try:
                     (run_dir / "train_summary.json").write_text(
                         json.dumps({
-                            "model_type": model_type,
+                            "model_id": model_id,
                             "split": split_name,
                             "max_iter": int(max_iter),
                             "train_seconds": train_seconds,
@@ -304,7 +305,7 @@ def main():
                 )
 
                 # Update the performance store
-                perf_df = update_perf_df(perf_df, model_type, split_name, int(max_iter), {
+                perf_df = update_perf_df(perf_df, model_id, split_name, int(max_iter), {
                     "byte_perplexity": test_metrics.get("byte_perplexity"),
                     "bits_per_byte": test_metrics.get("bits_per_byte"),
                     "exact_match": test_metrics.get("exact_match"),
@@ -313,7 +314,7 @@ def main():
                 })
 
                 # Recompute split_avg with current data
-                perf_df = recompute_split_avg(perf_df, [model_type], metrics, [int(max_iter)], split_names_no_avg)
+                perf_df = recompute_split_avg(perf_df, [model_id], metrics, [int(max_iter)], split_names_no_avg)
                 perf_df.to_pickle(perf_path)
 
                 # Progress bars

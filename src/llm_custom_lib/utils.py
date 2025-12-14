@@ -13,8 +13,9 @@ from ast import literal_eval
 import numpy as np
 import torch
 
-# initialize all seeds you might need so that every run is deterministic
+
 def set_seed(seed):
+    """ initialize all seeds you might need so that every run is deterministic """
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)

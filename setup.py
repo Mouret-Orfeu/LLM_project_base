@@ -13,10 +13,10 @@ def parse_requirements():
     return []
 
 setup(
-    name="rca-llm",
+    name="llm_custom_lib",
     version="0.1.0",
-    author="Your Name",
-    description="RCA LLM utilities (Trainer + utils + HFModelAdapter + RCADataset + Evaluator)",
+    author="Orfeu Mouret",
+    description="LLM utilities (Trainer + utils + HFModelAdapter + CustomDataset + Evaluator)",
     license="MIT",
     package_dir={"": "src"},
     packages=find_packages(where="src"),

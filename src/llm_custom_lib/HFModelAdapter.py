@@ -1,7 +1,7 @@
 """
-Encapsulation class for HuggingFace models to be trained with my Trainer class
+Encapsulation class for HuggingFace (HF) models to be trained with the custom Trainer class
 """
-
+from transformers.models.llama.modeling_llama import LlamaRMSNorm
 from transformers import AutoTokenizer
 from transformers.trainer import get_parameter_names
 import torch, torch.nn as nn
@@ -31,7 +31,7 @@ class HFModelAdapter(nn.Module):
                 try:
                     self.hf_model.resize_token_embeddings(len(self.tokenizer))
                 except AttributeError:
-                    pass  # some wrappers may not expose this <- understand this
+                    pass
 
         # Now pad_id is guaranteed to be an int
         pad_id = int(pad_id)
@@ -65,6 +65,15 @@ class HFModelAdapter(nn.Module):
         return_new_text_only=True,
         skip_special_tokens=True,
     ):
+        """
+        Generate text from a given prompt using the HuggingFace model.
+    
+        max_examples is the numberof examples to evaluate
+        max_new_tokens is the number of new tokens to generate
+        do_sample selects whether to use stochastic generation (True) or greedy decoding (False)
+        top_k selects the number of top ranked tokens to sample from in the case of stochastic generation (top_k = None means all tokens are considered)
+        print_examples is the number of examples to print out during evaluation
+        """
         if not prompt:
             return "no prompt given, please provide a non-empty prompt"
     
@@ -100,17 +109,32 @@ class HFModelAdapter(nn.Module):
     
 
     def configure_optimizers(self, train_config):
-        decay_names = get_parameter_names(self, [torch.nn.LayerNorm])
+        """
+        Setup the AdamW optimizer with weight decay (L2 regularisation) for applicable parameters.
+        Biases and LayerNorm weights are excluded from weight decay.
+
+        Depending on the model architecture, this method may need to be overridden or modified,
+        (for example, for models with different parameter names, or with other parameter types which should ).
+        
+        """
+
+        # recursively list all parameter names in the model except those that belong to normalization layers
+        decay_names = get_parameter_names(self, [torch.nn.LayerNorm, LlamaRMSNorm])
+
+        # exclude bias terms
         decay_names = [n for n in decay_names if not n.endswith(".bias")]
 
         decay_params, nodecay_params = [], []
         for n, p in self.named_parameters():
             if not p.requires_grad:
                 continue
+            # append the parameters which require gradiant descent and are in decay_names to decay_params, else to nodecay_params
             (decay_params if n in decay_names else nodecay_params).append(p)
 
         groups = [
             {"params": decay_params,   "weight_decay": train_config.weight_decay},
             {"params": nodecay_params, "weight_decay": 0.0},
         ]
+
+        # return the AdamW optimizer from torch.optim, with L2 regularization applied to decay_params only
         return torch.optim.AdamW(groups, lr=train_config.learning_rate, betas=train_config.betas)

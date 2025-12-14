@@ -4,4 +4,4 @@ __pycache__/
 .env
 .pylintrc
 venv
-rca_llm.egg-info
+llm_custom_lib.egg-info

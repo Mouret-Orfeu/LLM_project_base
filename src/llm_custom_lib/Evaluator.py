@@ -9,7 +9,7 @@ from typing import Optional, Tuple, List
 import torch
 from torch.utils.data import DataLoader
 
-from rca_llm.utils import CfgNode as CN
+from llm_custom_lib.utils import CfgNode as CN
 
 
 class Evaluator:
@@ -24,11 +24,22 @@ class Evaluator:
         C.batch_size = 64
 
         # generation/eval defaults
+        
+        # maximum number of examples to evaluate
         C.max_examples = 200
+
+        # number of new tokens to generate
         C.max_new_tokens = 300
+
+        # stochastic generation (True) or greedy decoding (False)
         C.do_sample = False
+
         C.temperature = 1.0
+
+        # If stochastic generation, the top_k to use (None = all tokens possible)
         C.top_k = None
+
+        # number of examples to print out during evaluation
         C.print_examples = 1
         return C
 
@@ -48,7 +59,7 @@ class Evaluator:
 
     @staticmethod
     def _normalize_text(s: Optional[str]) -> str:
-        # standardize the text (lowercase, removes punctuation, removes extra whitespace)
+        """standardize the text (lowercase, removes punctuation, removes extra whitespace)"""
         if s is None:
             return ''
         s = s.strip().lower()
@@ -58,15 +69,20 @@ class Evaluator:
 
     @classmethod
     def _token_lvl_f1_score(cls, prediction: str, ground_truth: str) -> float:
-        pred_tokens = cls._normalize_text(prediction).split()
+        # split into whitespace‑separated “tokens”
+        pred_tokens = cls._normalize_text(prediction).split() 
         gt_tokens = cls._normalize_text(ground_truth).split()
+
         if len(pred_tokens) == 0 and len(gt_tokens) == 0:
             return 1.0
         # count overlaps (bag-of-words)
         from collections import Counter
         pred_counts = Counter(pred_tokens)
         gt_counts = Counter(gt_tokens)
-        overlap = sum((pred_counts & gt_counts).values())
+
+        # counts the number of tokens that appear in both pred and ground truth, do not take order into account
+        overlap = sum((pred_counts & gt_counts).values()) 
+
         if overlap == 0:
             return 0.0
         precision = overlap / max(len(pred_tokens), 1)
@@ -79,7 +95,9 @@ class Evaluator:
 
     @staticmethod
     def _lcs(x: List[str], y: List[str]) -> int:
-        # Dynamic programming algorithm to find the length of the Longest Common Subsequence (LCS)
+        """Dynamic programming algorithm to find the length of the Longest Common Subsequence (LCS).
+        It is the longest overlap of tokens in the correct order (not necessarily consecutive) between prediction and ground truth.
+        """
         m, n = len(x), len(y)
         dp = [[0] * (n + 1) for _ in range(m + 1)]
         for i in range(m):
@@ -95,6 +113,9 @@ class Evaluator:
 
     @classmethod
     def _rougeL_f1(cls, prediction: str, ground_truth: str) -> float:
+        """Compute ROUGE-L F1 score between prediction and ground truth.
+        Meaining the F1 score based on the length of the Longest Common Subsequence (LCS) between prediction and ground truth.
+        """
         pred_tokens = cls._normalize_text(prediction).split()
         gt_tokens = cls._normalize_text(ground_truth).split()
         if len(pred_tokens) == 0 or len(gt_tokens) == 0:
@@ -159,7 +180,7 @@ class Evaluator:
 
         model.eval()
 
-        # BPB (bits_per_byte) over the split
+        # BPB (bits_per_byte) computation over the split
         total_nll, total_bytes = 0.0, 0
         loader = DataLoader(
             dataset,
@@ -204,8 +225,8 @@ class Evaluator:
         with torch.no_grad():
             for i_local in indices:
                 row_idx = int(dataset.ixes[i_local])
-                question = str(df.loc[row_idx, 'ticket_description'])
-                reference = str(df.loc[row_idx, 'ticket_resolution'])
+                question = str(df.loc[row_idx, 'question'])
+                reference = str(df.loc[row_idx, 'answer'])
                 prompt = dataset.prompt_description_addition + question + dataset.prompt_resolution_addition
 
                 generated = model.generate_from_prompt(
@@ -219,11 +240,13 @@ class Evaluator:
                     skip_special_tokens=True,
                 )
 
+                # Adds all the example metrics to get the averages later
                 examples.append((question, reference, generated))
                 total_exact_match += self._exact_match(generated, reference)
                 total_f1 += self._token_lvl_f1_score(generated, reference)
                 total_rougeL += self._rougeL_f1(generated, reference)
 
+        
         qa_em = total_exact_match / max(num_examples, 1)
         qa_f1 = total_f1 / max(num_examples, 1)
         rougeL = total_rougeL / max(num_examples, 1)

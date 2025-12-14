@@ -2,28 +2,34 @@ import torch
 from torch.utils.data import Dataset
 import pandas as pd
 
-class RCADataset(Dataset):
+class CustomDataset(Dataset):
     """ 
-    Dataset question & answers about IT incidents from itsm tickets.
-    Input: Bonjour l'équipe IT, mon projecteur pose problème. Il n'affiche aucun signal chaque fois que ... 
-    Output: Merci pour votre signalement. Le problème était lié à une panne serveur...
+    Dataset question & answers.
 
-    Which will feed into the transformer as a concatenation of input and output, with added context indications at the begining and between the two:
+    Example usecase was IT incidents from itsm tickets:
+    Input: "Hello IT Support, my Projector has been not displaying any signal. I've noticed ... "
+    Output: "We identified the root cause as a misconfigured network setting. After patched the system, ... "
+
+    Which will feed into the transformer as a concatenation of input and output, with added context indications at the beginning and between the two:
     example:
-    description du ticket itsm: Bonjour l'équipe IT, mon projecteur pose problème. Il n'affiche aucun signal chaque fois que ... 
-    Réponse de l'équipe IT pour la résolution du ticket: Merci pour votre signalement. Le problème était lié à une panne serveur...
+    enriched input: "description du ticket itsm: Hello IT Support, my Projector has been not displaying any signal. I've noticed ... "
+    enriched output: "Réponse de l'équipe IT pour la résolution du ticket: We identified the root cause as a misconfigured network setting. After patched the system, ... "
 
     """
 
+    # When initializing, be sure to override block_size, prompt_description_addition and prompt_resolution_addition to your liking
     def __init__(self, df, split, tokenizer, block_size = 1024, test_frac=0.2, test_cap=None, seed=None, indices=None):
         assert split in {"train", "test"}
         self.df = df.reset_index(drop=True)
         self.split = split
         self.tokenizer = tokenizer
         self.block_size = block_size
+
+        # These 2 have to be adapted to the usecase of this dataset, or set using the setter
         self.prompt_description_addition = "description du ticket itsm: "
         self.prompt_resolution_addition = "\nRéponse de l'équipe IT pour la résolution du ticket: "
         
+
 
         # Build split indices deterministically if a seed is provided, or use
         # explicit indices if given. This ensures train/test are disjoint when
@@ -42,12 +48,22 @@ class RCADataset(Dataset):
 
             num_test = int(N * test_frac)
             if test_cap is not None:
+                # test_cap limits the maximum number of test samples
                 num_test = min(num_test, test_cap)
 
             test_idx = perm[:num_test]
             train_idx = perm[num_test:]
 
+            # the size of the dataset created
             self.ixes = test_idx if split == "test" else train_idx
+    
+    def set_prompt_description_addition(self, text):
+        self.prompt_description_addition = text
+    def set_prompt_resolution_addition(self, text):
+        # test if there is "\n" at the beginning, if not, print a message warning
+        if not text.startswith("\n"):
+            print("Warning: You might want to add a newline character at the beginning of the prompt_resolution_addition (\\n).")
+        self.prompt_resolution_addition = text
 
     def __len__(self):
         return self.ixes.numel()
@@ -65,8 +81,8 @@ class RCADataset(Dataset):
     def __getitem__(self, i):
 
         row_idx = int(self.ixes[i])
-        question = str(self.df.loc[row_idx, 'ticket_description'])
-        answer = str(self.df.loc[row_idx, 'ticket_resolution'])
+        question = str(self.df.loc[row_idx, 'question'])
+        answer = str(self.df.loc[row_idx, 'answer'])
 
         # prompt/answer texts
         prompt = self.prompt_description_addition + question + self.prompt_resolution_addition
@@ -98,15 +114,19 @@ class RCADataset(Dataset):
             answer_token_ids = answer_token_ids[:free_contextual_window_space]
             full_sequence_token_ids = prompt_token_ids + answer_token_ids
 
-        # convert to tensors
+        # convert x to tensors
+        # x is the full input sequence token ids fed to the model for training, 
+        # from which the prompt_description_addition, question and prompt_resolution_addition tokens will be masked so that 
+        # the Loss is only computed on the answer part
         x = torch.tensor(full_sequence_token_ids, dtype=torch.long)
 
         # y: ignore prompt tokens; learn on answer tokens
         y = x.clone()
         prompt_len = len(prompt_token_ids)  # guard if prompt >= block_size
+        # Masking everything except the answer part here (when token id is -100, that token is ignored in loss computation)
         y[:prompt_len] = -100
 
-        # right-pad to block_size if needed
+        # right-pad to block_size if needed so that all (x,y) have same size
         pad_id = self.tokenizer.pad_token_id if self.tokenizer.pad_token_id is not None else self.tokenizer.eos_token_id
         pad_id = int(pad_id)  # ensure it's an int
         pad_len = self.block_size - x.numel()

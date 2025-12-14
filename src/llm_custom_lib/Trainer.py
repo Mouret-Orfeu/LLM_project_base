@@ -9,7 +9,7 @@ from collections import defaultdict
 
 import torch
 from torch.utils.data.dataloader import DataLoader
-from rca_llm.utils import CfgNode as CN
+from llm_custom_lib.utils import CfgNode as CN
 
 class Trainer:
 
