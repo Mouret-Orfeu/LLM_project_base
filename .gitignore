@@ -3,5 +3,5 @@ __pycache__/
 *.swp
 .env
 .pylintrc
-venv
+.venv
 llm_custom_lib.egg-info

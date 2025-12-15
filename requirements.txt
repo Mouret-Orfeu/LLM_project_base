@@ -10,3 +10,6 @@ streamlit-chat
 selenium
 openai
 matplotlib
+ipywidgets
+accelerate
+huggingface-hub<1.0,>=0.34.0
