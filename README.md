@@ -34,7 +34,3 @@ python -m pip install --upgrade pip
 pip install -r requirements.txt
 pip install -e .
 ```
-(For local execution, do not run the first cell of the notebooks, but run the second one adding your working directory.)
-
-If you want to run this project from a Google Colab notebook, open a notebook of the project on Google Colab and such and run the first cell.
-Do not run the second cell.
